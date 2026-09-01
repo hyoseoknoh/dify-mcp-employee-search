@@ -1,3 +1,4 @@
+import csv
 import os
 import re
 import smtplib
@@ -14,6 +15,9 @@ mcp = MCPServer("mail_MCP")
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILE = os.path.join(BASE_DIR, "employees.csv")
 
 GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS", "").strip()
 GMAIL_APP_PASSWORD = (
@@ -54,6 +58,46 @@ def create_default_subject(body: str) -> str:
         return "案件のご案内"
 
     return "ご連絡"
+
+
+def normalize_name(value: str) -> str:
+    """직원 이름의 앞뒤 및 연속 공백을 정리합니다."""
+
+    return " ".join((value or "").strip().split())
+
+
+def find_employee_email(name: str) -> tuple[str, str]:
+    """CSV에서 직원 이름을 정확히 찾아 (이메일, 오류 메시지)를 반환합니다."""
+
+    employee_name = normalize_name(name)
+    if not employee_name:
+        return "", "직원 이름을 입력해 주세요."
+
+    if not os.path.isfile(CSV_FILE):
+        return "", "employees.csv 파일을 찾을 수 없습니다."
+
+    try:
+        with open(CSV_FILE, "r", newline="", encoding="utf-8-sig") as file:
+            matches = [
+                row
+                for row in csv.DictReader(file)
+                if normalize_name(row.get("name", "")).casefold()
+                == employee_name.casefold()
+            ]
+    except (OSError, csv.Error) as exc:
+        return "", f"직원 CSV를 읽지 못했습니다: {exc}"
+
+    if not matches:
+        return "", f"{employee_name}의 직원 정보를 찾을 수 없습니다."
+
+    if len(matches) > 1:
+        return "", f"{employee_name} 이름의 직원이 여러 명이라 메일을 발송하지 않았습니다."
+
+    email = (matches[0].get("email") or "").strip()
+    if not is_valid_email(email):
+        return "", f"{employee_name}의 올바른 이메일 주소가 등록되어 있지 않습니다."
+
+    return email, ""
 
 
 # ==================================================
@@ -150,6 +194,43 @@ def send_email(
 
     except Exception as exc:
         return f"메일 발송 중 오류가 발생했습니다: {exc}"
+
+
+@mcp.tool()
+def send_employee_email(
+    name: str,
+    subject: str = "",
+    body: str = "",
+) -> str:
+    """
+    직원 이름으로 employees.csv에서 이메일을 찾은 뒤 메일을 발송합니다.
+
+    Args:
+        name: 메일을 받을 직원 이름
+        subject: 메일 제목. 비어 있으면 본문에서 자동 생성합니다.
+        body: 메일 본문
+    """
+
+    employee_name = normalize_name(name)
+    email, error = find_employee_email(employee_name)
+    if error:
+        return error
+
+    result = send_email(
+        to_email=email,
+        subject=subject,
+        body=body,
+    )
+
+    if result.startswith("메일 발송에 성공했습니다."):
+        return (
+            "메일 발송에 성공했습니다.\n"
+            f"직원: {employee_name}\n"
+            f"수신자: {email}\n"
+            + "\n".join(result.splitlines()[2:])
+        )
+
+    return result
 
 
 # ==================================================

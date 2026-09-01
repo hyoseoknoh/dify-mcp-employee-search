@@ -803,6 +803,51 @@ def get_employee_message(name: str) -> str:
 
 
 @mcp.tool()
+def get_employee_message_from_query(query: str) -> str:
+    """사용자 질문에서 등록된 직원 이름을 찾아 상세정보를 바로 반환합니다."""
+
+    normalized_query = normalize_name(query)
+    if not normalized_query:
+        return "社員名を含む質問を入力してください。"
+
+    try:
+        rows = read_rows()
+    except EmployeeDataError as exc:
+        return str(exc)
+
+    query_key = normalized_query.casefold()
+    matched_names: list[str] = []
+    seen: set[str] = set()
+
+    # 긴 이름부터 확인하여 짧은 이름이 긴 이름의 일부인 경우를 줄입니다.
+    names = sorted(
+        (normalize_name(row.get("name")) for row in rows),
+        key=len,
+        reverse=True,
+    )
+
+    for employee_name in names:
+        key = employee_name.casefold()
+
+        # '/', 공백 등 잘못 저장된 기존 데이터가 질문에 우연히 일치하지 않도록 제외합니다.
+        if len(employee_name) < 2 or not any(character.isalnum() for character in employee_name):
+            continue
+
+        if key in query_key and key not in seen:
+            seen.add(key)
+            matched_names.append(employee_name)
+
+    if not matched_names:
+        return "質問から登録済みの社員名を確認できませんでした。社員名を正確に入力してください。"
+
+    if len(matched_names) > 1:
+        names_text = "、".join(matched_names)
+        return f"複数の社員名が含まれています: {names_text}。1名だけ指定してください。"
+
+    return get_employee_message(matched_names[0])
+
+
+@mcp.tool()
 def get_employee_email(name: str) -> str:
     """Dify 메일 발송의 to_email에 바로 연결할 이메일 주소만 반환합니다."""
 
