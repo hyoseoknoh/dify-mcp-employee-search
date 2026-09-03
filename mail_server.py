@@ -101,17 +101,16 @@ def find_employee_email(name: str) -> tuple[str, str]:
 
 
 # ==================================================
-# MCP TOOL - 메일 발송
+# 내부 함수 - 이메일 주소로 메일 발송
 # ==================================================
 
-@mcp.tool()
-def send_email(
+def _send_email(
     to_email: str,
     subject: str = "",
     body: str = "",
 ) -> str:
     """
-    지정된 이메일 주소로 메일을 발송합니다.
+    지정된 이메일 주소로 메일을 발송하는 내부 함수입니다.
 
     Args:
         to_email: 수신자의 이메일 주소
@@ -216,7 +215,7 @@ def send_employee_email(
     if error:
         return error
 
-    result = send_email(
+    result = _send_email(
         to_email=email,
         subject=subject,
         body=body,

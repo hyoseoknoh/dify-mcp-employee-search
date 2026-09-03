@@ -76,6 +76,49 @@ LIST_FIELDS = {
 LIST_SEPARATOR_PATTERN = re.compile(r"[|,、，;；\n]+")
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
+NATIONALITY_ALIASES = {
+    "한국": "韓国",
+    "한국인": "韓国",
+    "대한민국": "韓国",
+    "韓国人": "韓国",
+    "korea": "韓国",
+    "korean": "韓国",
+    "일본": "日本",
+    "일본인": "日本",
+    "日本人": "日本",
+    "japan": "日本",
+    "japanese": "日本",
+    "중국": "中国",
+    "중국인": "中国",
+    "中国人": "中国",
+    "china": "中国",
+    "chinese": "中国",
+    "대만": "台湾",
+    "대만인": "台湾",
+    "台湾人": "台湾",
+    "taiwan": "台湾",
+    "taiwanese": "台湾",
+    "베트남": "ベトナム",
+    "베트남인": "ベトナム",
+    "越南": "ベトナム",
+    "vietnam": "ベトナム",
+    "vietnamese": "ベトナム",
+    "인도": "インド",
+    "인도인": "インド",
+    "印度": "インド",
+    "india": "インド",
+    "indian": "インド",
+    "필리핀": "フィリピン",
+    "필리핀인": "フィリピン",
+    "philippines": "フィリピン",
+    "filipino": "フィリピン",
+    "영국": "イギリス",
+    "영국인": "イギリス",
+    "英国": "イギリス",
+    "uk": "イギリス",
+    "british": "イギリス",
+}
+
 
 class EmployeeDataError(Exception):
     """직원 데이터 읽기/쓰기 또는 입력 검증 오류입니다."""
@@ -161,6 +204,13 @@ def parse_experience(value: Any) -> int:
         return max(0, int(clean_text(value) or 0))
     except ValueError:
         return 0
+
+
+def normalize_nationality(value: Any) -> str:
+    """한국어·일본어·영어의 국적 표현을 CSV의 대표 표기로 통일합니다."""
+
+    text = clean_text(value)
+    return NATIONALITY_ALIASES.get(text.casefold(), text)
 
 
 def validate_iso_date(value: Any, field_name: str) -> str:
@@ -353,6 +403,23 @@ def contains_value(csv_value: str, search_value: str) -> bool:
     return bool(target) and target in {item.casefold() for item in parse_list(csv_value)}
 
 
+def normalize_certification_query(value: str) -> str:
+    """'AWS資格', 'AWS 자격증' 같은 일반 표현에서 자격 관련 접미사를 제거합니다."""
+
+    text = clean_text(value)
+    text = re.sub(r"\s*(?:資格|認定資格|자격증|자격)\s*$", "", text, flags=re.IGNORECASE)
+    return text.strip().casefold()
+
+
+def contains_certification(csv_value: str, search_value: str) -> bool:
+    """자격증은 AWS → AWS SAA/AWS SAP처럼 계열명 부분 검색을 허용합니다."""
+
+    target = normalize_certification_query(search_value)
+    if not target:
+        return False
+    return any(target in item.casefold() for item in parse_list(csv_value))
+
+
 def error_response(message: str) -> dict[str, Any]:
     """MCP 도구 공통 오류 응답입니다."""
 
@@ -376,7 +443,7 @@ def search_employees(
     """모든 전달 조건을 AND로 만족하는 직원을 반환합니다."""
 
     department_key = clean_text(department).casefold()
-    nationality_key = clean_text(nationality).casefold()
+    nationality_key = normalize_nationality(nationality).casefold()
     skills = skills or []
     languages = languages or []
     certifications = certifications or []
@@ -387,14 +454,17 @@ def search_employees(
     for row in read_rows():
         if department_key and department_key not in row["department"].casefold():
             continue
-        if nationality_key and nationality_key != row["nationality"].casefold():
+        if (
+            nationality_key
+            and nationality_key != normalize_nationality(row["nationality"]).casefold()
+        ):
             continue
         if skills and not all(contains_value(row["skills"], item) for item in skills):
             continue
         if languages and not all(contains_value(row["languages"], item) for item in languages):
             continue
         if certifications and not all(
-            contains_value(row["certifications"], item) for item in certifications
+            contains_certification(row["certifications"], item) for item in certifications
         ):
             continue
         if parse_experience(row["experience_years"]) < minimum:
@@ -829,8 +899,8 @@ def get_employee_message_from_query(query: str) -> str:
     for employee_name in names:
         key = employee_name.casefold()
 
-        # '/', 공백 등 잘못 저장된 기존 데이터가 질문에 우연히 일치하지 않도록 제외합니다.
-        if len(employee_name) < 2 or not any(character.isalnum() for character in employee_name):
+        # 문자나 숫자가 전혀 없는 값만 제외합니다. 'ノ' 같은 단일 문자 이름은 허용합니다.
+        if not any(character.isalnum() for character in employee_name):
             continue
 
         if key in query_key and key not in seen:
@@ -892,9 +962,15 @@ def format_compact_search_employee(
 
     requested_certifications = criteria.get("certifications") or []
     if requested_certifications:
-        matched = matched_requested_values(
-            employee.get("certifications", []), requested_certifications
-        )
+        matched = [
+            actual
+            for actual in employee.get("certifications", [])
+            if any(
+                normalize_certification_query(requested) in actual.casefold()
+                for requested in requested_certifications
+                if normalize_certification_query(requested)
+            )
+        ]
         lines.append(f"該当資格: {display_value(matched)}")
 
     # Dify가 경력 조건이 없는 경우 0을 전달하기도 하므로, 1년 이상일 때만 표시합니다.
@@ -924,8 +1000,12 @@ def search_employee_message(
     min_experience_years: int | None = None,
     available_regions: list[str] | str | None = None,
     available_from: str = "",
+    show_details: bool = False,
 ) -> str:
-    """Dify 답변 노드에 바로 연결할 직원 검색결과 문자열을 반환합니다."""
+    """Dify 답변 노드에 바로 연결할 직원 검색결과 문자열을 반환합니다.
+
+    show_details가 True이면 검색 인원수와 관계없이 전체 상세정보를 표시합니다.
+    """
 
     result = search_employee_data(
         department=department,
@@ -944,8 +1024,8 @@ def search_employee_message(
     if not employees:
         return clean_text(result.get("message")) or "条件に一致する社員は見つかりませんでした。"
 
-    # 1名だけなら従来どおり詳細を表示します。
-    if len(employees) == 1:
+    # 사용자가 전체 상세정보를 요청했거나 결과가 1명이면 상세 표시합니다.
+    if show_details or len(employees) == 1:
         return clean_text(result.get("message"))
 
     # 2名以上なら、氏名とユーザーが指定した条件だけを表示します。
