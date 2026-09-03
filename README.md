@@ -49,6 +49,16 @@ Python 경험이 있고 일본어로 의사소통할 수 있는 직원을 찾아
 시스템: 등록된 이메일 주소를 확인한 뒤 메일을 발송합니다.
 ```
 
+## 실행 화면
+
+### Dify 워크플로우
+
+![Dify 워크플로우](assets/dify-workflow.png)
+
+### 자연어 직원 검색과 후속 필터링
+
+![Dify 직원 검색 실행 화면](assets/dify-demo.gif)
+
 ## 전체 구조
 
 ```mermaid
