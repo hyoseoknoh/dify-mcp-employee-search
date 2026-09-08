@@ -13,3 +13,7 @@ dify/
 
 .vscode/
 .idea/
+
+documents.db
+documents.db-*
+output/pdf/
