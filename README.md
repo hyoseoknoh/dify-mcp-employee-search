@@ -1,8 +1,8 @@
 # Dify × MCP 자연어 직원 검색 시스템
 
-사용자가 자연어로 직원·엔지니어를 검색하고, 상세정보와 이력서를 확인하며, 선택한 직원에게 이메일을 보낼 수 있는 업무 지원 프로토타입입니다.
+사용자가 자연어로 직원·엔지니어를 검색하고, 상세정보와 이력서를 확인하며, 검색된 후보자 목록을 PDF로 만들어 이메일로 보낼 수 있는 업무 지원 프로토타입입니다.
 
-Dify가 질문을 분류하고 검색조건을 추출하면 Python MCP 서버가 CSV 데이터를 검색합니다. 직원 정보의 추가·수정·삭제는 Claude Desktop과 같은 MCP 클라이언트에서도 실행할 수 있습니다.
+Dify가 질문을 분류하고 검색조건을 추출하면 Python MCP 서버가 CSV 데이터를 검색합니다. 검색 결과는 SQLite에 후보자 자료로 저장할 수 있으며, 일본어 PDF 생성과 Gmail 첨부 전송까지 하나의 요청으로 실행할 수 있습니다. 직원 정보의 추가·수정·삭제는 Claude Desktop과 같은 MCP 클라이언트에서도 실행할 수 있습니다.
 
 > 개인정보, 실제 이력서, Gmail 인증정보는 저장소에 포함하지 않습니다.
 
@@ -10,7 +10,7 @@ Dify가 질문을 분류하고 검색조건을 추출하면 Python MCP 서버가
 
 일본 IT 기업의 인턴 과정에서 파견 업무에 활용할 수 있는 시스템을 주제로 제작한 프로토타입입니다.
 
-거래처가 요구하는 개발 스킬, 언어, 실무경력, 근무 가능 지역 등의 조건에 맞는 엔지니어를 담당자가 자연어로 검색할 수 있도록 구현했습니다. 또한 특정 직원의 상세정보와 이력서를 확인하고, 프로젝트 안내 메일을 발송하는 흐름까지 구성했습니다.
+거래처가 요구하는 개발 스킬, 언어, 실무경력, 근무 가능 지역 등의 조건에 맞는 엔지니어를 담당자가 자연어로 검색할 수 있도록 구현했습니다. 또한 특정 직원의 상세정보와 이력서를 확인하고, 검색된 후보자 정보를 자료로 저장한 뒤 PDF로 정리하여 담당자에게 메일로 보내는 흐름까지 구성했습니다.
 
 본 저장소에는 회사의 실제 개인정보나 기밀정보를 포함하지 않으며, 포트폴리오 공개 시에는 익명화한 데이터 또는 샘플 데이터를 사용합니다.
 
@@ -31,6 +31,10 @@ Python 경험이 있고 일본어로 의사소통할 수 있는 직원을 찾아
 - 특정 직원의 전체 프로필과 이력서 링크 조회
 - 직원 정보 추가·조회·수정·삭제(CRUD)
 - 직원 이름으로 이메일을 조회한 뒤 Gmail SMTP로 메일 발송
+- 검색조건과 후보자 스냅샷을 SQLite에 자료 단위로 저장
+- 검색된 후보자 목록을 일본어 PDF로 자동 생성
+- 생성된 PDF를 담당자 이메일에 첨부하여 전송
+- 직원 검색 MCP와 메일 MCP를 조합한 연속 업무 처리
 - MCP Streamable HTTP 지원
 
 ## 사용 예시
@@ -47,6 +51,9 @@ Python 경험이 있고 일본어로 의사소통할 수 있는 직원을 찾아
 
 사용자: 加藤大輔에게 Java 프로젝트가 있다고 메일을 보내주세요.
 시스템: 등록된 이메일 주소를 확인한 뒤 메일을 발송합니다.
+
+사용자: Java가 가능하고 경력이 2년 이상인 직원을 검색해 후보자 목록을 PDF로 만들고 담당자 이메일로 보내주세요.
+시스템: 조건에 맞는 직원을 검색하고 후보자 자료를 DB에 저장한 뒤, PDF를 생성하여 이메일에 첨부합니다.
 ```
 
 ## 실행 화면
@@ -68,13 +75,20 @@ flowchart LR
     C -->|직원 검색| E[검색조건 추출]
     C -->|상세조회| G[직원 이름 확인]
     C -->|메일 발송| M[메일정보 추출]
+    C -->|후보자 PDF 발송| P[PDF용 조건·메일정보 추출]
     E --> S[직원 MCP 서버 :8000]
     G --> S
+    P --> CP[후보자 PDF 생성 도구]
+    CP --> S
     S --> CSV[(employees.csv)]
     S --> PDF[(이력서 PDF)]
+    S --> DB[(documents.db)]
+    S --> OUT[(후보자 목록 PDF)]
     S --> D
     M --> MS[메일 MCP 서버 :8001]
+    CP --> MS
     MS --> CSV
+    OUT --> MS
     MS --> SMTP[Gmail SMTP]
     MS --> D
     D --> U
@@ -87,6 +101,7 @@ flowchart LR
 | 클래스 1 | `Python 가능한 사람 찾아줘`, `그 4명 모두 자세히 알려줘` | 조건 추출 → 직원 검색 → 결과 반환 |
 | 클래스 2 | `キム・ミンジュン 상세히 알려줘`, `王芳의 이력서 보여줘` | 직원 이름 확인 → 상세조회 |
 | 클래스 3 | `加藤大輔에게 메일 보내줘` | 이름·제목·본문 추출 → 메일 발송 |
+| 클래스 4 | `Java 경력 2년 이상 후보자를 PDF로 만들어 메일로 보내줘` | 조건 추출 → 검색·DB 저장·PDF 생성 → PDF 첨부 메일 발송 |
 
 Java 검색 요청은 다음 순서로 처리됩니다.
 
@@ -100,6 +115,19 @@ Java 검색 요청은 다음 순서로 처리됩니다.
 → Dify가 사용자에게 출력
 ```
 
+후보자 PDF 발송 요청은 발표와 실제 사용 시 흐름을 단순하게 유지하기 위해 통합 MCP 도구로 처리합니다.
+
+```text
+사용자 질문
+→ 질문 분류기에서 클래스 4 선택
+→ 검색조건·자료 제목·수신자·메일 내용 추출
+→ 직원 MCP의 create_candidate_proposal_pdf 호출
+→ 조건 검색·SQLite 저장·후보자 PDF 생성
+→ 메일 MCP의 send_proposal_email_from_result 호출
+→ 생성된 PDF를 Gmail SMTP로 첨부 전송
+→ 처리 결과를 사용자에게 출력
+```
+
 ## 파일별 역할
 
 ```text
@@ -108,18 +136,30 @@ employee-search-mcp/
 ├── employee_mcp.py    # 여러 파일이 공유하는 직원 MCP 객체 생성
 ├── employee_tools.py  # Dify·Claude가 호출하는 MCP 도구 등록
 ├── employee_core.py   # CSV 입출력, 검증, 검색, 결과 형식 처리
-├── mail_server.py     # 이메일 조회 및 8001번 메일 MCP 서버 실행
+├── document_store.py  # 후보자 자료와 스냅샷을 SQLite에 저장
+├── proposal_pdf.py    # 저장된 후보자 자료를 일본어 PDF로 생성
+├── mail_server.py     # 일반 메일·PDF 첨부 메일 및 8001번 서버 실행
 ├── employees.csv      # 직원 데이터(저장소에서 제외)
+├── documents.db       # 후보자 자료 DB(저장소에서 제외)
 ├── pdf/               # 이력서 PDF(저장소에서 제외)
+├── output/pdf/        # 생성된 후보자 목록 PDF(저장소에서 제외)
 ├── start_mcp.sh       # tmux 개발환경 일괄 실행
 ├── pyproject.toml
 └── README.md
 ```
 
-요청 처리 관계:
+일반 검색 요청 처리 관계:
 
 ```text
 Dify → server.py → employee_tools.py → employee_core.py → employees.csv
+```
+
+후보자 PDF 메일 요청 처리 관계:
+
+```text
+Dify
+→ 직원 MCP: 검색 → documents.db 저장 → PDF 생성
+→ 메일 MCP: 생성된 PDF 확인 → Gmail SMTP 첨부 전송
 ```
 
 `employee_mcp.py`는 `server.py`와 `employee_tools.py`가 동일한 MCP 서버 객체를 공유하게 합니다. 이를 통해 MCP 객체의 중복 생성과 파일 간 순환 참조를 방지합니다.
@@ -141,12 +181,19 @@ Dify → server.py → employee_tools.py → employee_core.py → employees.csv
 | `add_employee` | 직원 추가 |
 | `update_employee` | 직원 정보 수정 |
 | `delete_employee` | 직원 삭제 |
+| `create_candidate_proposal` | 검색된 직원 이름 목록을 후보자 자료로 DB에 저장 |
+| `get_candidate_proposal` | 자료번호로 저장된 조건과 후보자 정보 조회 |
+| `remove_candidate_from_proposal` | 원본 직원정보를 변경하지 않고 자료에서 후보자 제외 |
+| `export_candidate_proposal_pdf` | 저장된 후보자 자료번호로 PDF 생성 |
+| `create_candidate_proposal_pdf` | 조건 검색·DB 저장·PDF 생성을 한 번에 실행 |
 
 ### 메일 MCP 서버(`8001`)
 
 | 도구 | 역할 |
 |---|---|
 | `send_employee_email` | 직원 이름으로 이메일을 조회하고 메일 발송 |
+| `send_proposal_email` | 지정된 후보자 PDF를 담당자 이메일에 첨부 전송 |
+| `send_proposal_email_from_result` | 직원 MCP의 PDF 생성 결과를 받아 파일명 추출 없이 첨부 전송 |
 
 ## 직원 데이터 구조
 
@@ -175,6 +222,8 @@ Dify → server.py → employee_tools.py → employee_core.py → employees.csv
 - Starlette / Uvicorn
 - Claude Desktop
 - Gmail SMTP
+- SQLite
+- ReportLab
 - ngrok / Cloudflare Tunnel
 - tmux
 
@@ -263,6 +312,9 @@ lsof -nP -iTCP:8001 -sTCP:LISTEN
 employees.csv
 pdf/
 dify/
+documents.db
+documents.db-*
+output/pdf/
 ```
 
 - 실제 직원 이름, 이메일, 이력서는 공개하지 않습니다.
@@ -277,6 +329,7 @@ dify/
 - CSV를 MySQL 또는 PostgreSQL로 전환
 - MCP 서버를 클라우드 환경에 배포
 - 임시 터널 대신 고정 도메인 사용
+- 생성된 PDF를 로컬 파일 대신 인증된 스토리지에서 관리
 - 사용자 인증과 역할별 접근권한 추가
 - 직원 이름 대신 고유 ID를 사용해 동명이인 처리
 - 이메일 발송 전 사용자 확인 단계 추가
@@ -287,6 +340,9 @@ dify/
 - 자연어를 구조화된 검색조건으로 변환하는 방법
 - Dify 워크플로우와 MCP 도구의 역할 분리
 - 하나의 MCP 서버에 여러 업무 도구를 등록하는 방법
+- 여러 MCP 서버를 조합해 검색·문서 생성·메일 전송을 연결하는 방법
+- SQLite에 검색 당시 후보자 정보를 스냅샷으로 저장하는 방법
+- 일본어 글꼴을 포함한 PDF 생성과 첨부파일 검증 방법
 - 데이터 검색 로직과 사용자 출력 로직을 분리하는 방법
 - 로컬 서버를 외부 AI 서비스와 연결할 때 필요한 보안 고려사항
 
