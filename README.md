@@ -60,7 +60,7 @@ Python 경험이 있고 일본어로 의사소통할 수 있는 직원을 찾아
 
 ### Dify 워크플로우
 
-![Dify 워크플로우](assets/dify-workflow.png)
+![Dify 워크플로우](assets/dify-workflow-v2.png)
 
 ### 자연어 연속 검색부터 후보자 PDF 메일 전송까지
 
