@@ -2,14 +2,13 @@
 
 import argparse
 import os
-from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
@@ -27,8 +26,19 @@ LABELS = {
     "experience_years": "実務経験年数", "available_regions": "勤務可能地域",
     "available_from": "参加可能日",
 }
-FIELDS = ["department", "task", "skills", "experience_years", "languages",
-          "certifications", "available_regions", "available_from"]
+TABLE_COLUMNS = [
+    ("No.", None, 8 * mm),
+    ("氏名", "name", 26 * mm),
+    ("部署", "department", 21 * mm),
+    ("担当業務", "task", 29 * mm),
+    ("国籍", "nationality", 18 * mm),
+    ("スキル", "skills", 38 * mm),
+    ("使用言語", "languages", 26 * mm),
+    ("資格", "certifications", 25 * mm),
+    ("経験年数", "experience_years", 17 * mm),
+    ("勤務可能地域", "available_regions", 26 * mm),
+    ("参画可能日", "available_from", 25 * mm),
+]
 
 
 def register_font():
@@ -52,6 +62,26 @@ def display(value):
     return "未登録" if value is None or value == "" else str(value)
 
 
+def table_display(value):
+    """一覧表向けに空欄と配列を短く表示します。"""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value) or "なし"
+    return "なし" if value is None or value == "" else str(value)
+
+
+def format_condition_summary(conditions):
+    parts = []
+    for key, value in conditions.items():
+        if value is None or value == "" or value == [] or value == 0:
+            continue
+        label = LABELS.get(key, key)
+        shown = table_display(value)
+        if key == "min_experience_years":
+            shown = f"{shown}年以上"
+        parts.append(f"{label} = {shown}")
+    return " / ".join(parts) if parts else "指定条件なし"
+
+
 def export_proposal_pdf(proposal_id: int) -> dict:
     """保存済みスナップショットを出力。CSVの再検索やDBの変更は行いません。"""
     if isinstance(proposal_id, bool) or not isinstance(proposal_id, int) or proposal_id < 1:
@@ -64,64 +94,87 @@ def export_proposal_pdf(proposal_id: int) -> dict:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / f"proposal_{proposal_id}_{uuid4().hex[:12]}.pdf"
     body = ParagraphStyle("Body", fontName="ProposalJP", fontSize=9,
-                          leading=14, wordWrap="CJK", alignment=TA_LEFT)
-    heading = ParagraphStyle("Heading", parent=body, fontSize=14, leading=21,
-                             spaceBefore=16, spaceAfter=8, keepWithNext=True,
-                             textColor=colors.HexColor("#163B57"))
-    title = ParagraphStyle("Title", parent=heading, fontSize=22, leading=30)
+                          leading=12, wordWrap="CJK", alignment=TA_LEFT)
+    title = ParagraphStyle(
+        "Title",
+        parent=body,
+        fontSize=22,
+        leading=28,
+        alignment=TA_CENTER,
+        spaceAfter=5 * mm,
+    )
+    meta = ParagraphStyle("Meta", parent=body, fontSize=9, leading=13)
+    cell = ParagraphStyle("Cell", parent=body, fontSize=7.2, leading=9.2)
+    header = ParagraphStyle(
+        "Header",
+        parent=cell,
+        fontSize=7.4,
+        leading=9.4,
+        textColor=colors.white,
+    )
 
     def p(value, style=body):
         return Paragraph(escape(display(value)).replace("\n", "<br/>"), style)
 
-    width = A4[0] - 36 * mm
+    def table_cell(value, style=cell):
+        return Paragraph(escape(table_display(value)), style)
 
-    def table(rows):
-        result = Table([[p(label), p(value)] for label, value in rows],
-                       colWidths=[38 * mm, width - 38 * mm],
-                       hAlign="LEFT", splitByRow=1, splitInRow=1)
-        result.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#EDF3F7")),
-            ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#D6E0E7")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ]))
-        return result
-
-    story = [p(proposal["title"], title),
-             p(f"資料番号: {proposal_id}  /  候補者数: {len(candidates)}名"),
-             p(f"PDF作成日時: {datetime.now():%Y-%m-%d %H:%M}"),
-             Spacer(1, 3 * mm),
-             p("本資料はDBに保存された候補者情報をもとに作成しています。"),
-             p("検索条件", heading)]
-    conditions = [(LABELS.get(key, key), value)
-                  for key, value in proposal["conditions"].items()
-                  if value is not None and value != "" and value != []]
-    story.append(table(conditions) if conditions else p("指定条件なし"))
+    rows = [[table_cell(label, header) for label, _, _ in TABLE_COLUMNS]]
     for index, person in enumerate(candidates, 1):
-        story.append(p(f"{index:02d}  {person.get('name', '未登録')}", heading))
-        rows = []
-        for key in FIELDS:
-            value = person.get(key)
+        row = []
+        for _, key, _ in TABLE_COLUMNS:
+            value = index if key is None else person.get(key)
             if key == "experience_years" and value is not None and value != "":
                 value = f"{value}年"
-            rows.append((LABELS[key], value))
-        story.append(table(rows))
+            row.append(table_cell(value))
+        rows.append(row)
+
+    candidate_table = Table(
+        rows,
+        colWidths=[width for _, _, width in TABLE_COLUMNS],
+        repeatRows=1,
+        hAlign="CENTER",
+        splitByRow=1,
+    )
+    table_style = [
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#355EA8")),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#A8A8A8")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, 0), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+        ("TOPPADDING", (0, 1), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
+    ]
+    for row_index in range(2, len(rows), 2):
+        table_style.append(
+            ("BACKGROUND", (0, row_index), (-1, row_index), colors.HexColor("#F2F2F2"))
+        )
+    candidate_table.setStyle(TableStyle(table_style))
+
+    story = [
+        p(proposal["title"], title),
+        p(f"資料番号: {proposal_id}", meta),
+        p(f"検索条件: {format_condition_summary(proposal['conditions'])}", meta),
+        p(f"候補者数: {len(candidates)}名", meta),
+        Spacer(1, 5 * mm),
+        candidate_table,
+    ]
 
     def footer(canvas, doc):
         canvas.saveState()
         canvas.setStrokeColor(colors.HexColor("#D6E0E7"))
-        canvas.line(18 * mm, 16 * mm, A4[0] - 18 * mm, 16 * mm)
+        page_width = landscape(A4)[0]
+        canvas.line(12 * mm, 10 * mm, page_width - 12 * mm, 10 * mm)
         canvas.setFont("ProposalJP", 8)
-        canvas.drawString(18 * mm, 11 * mm, f"候補者資料 / {proposal_id}")
-        canvas.drawRightString(A4[0] - 18 * mm, 11 * mm, str(doc.page))
+        canvas.drawString(12 * mm, 6 * mm, f"候補者資料 / {proposal_id}")
+        canvas.drawRightString(page_width - 12 * mm, 6 * mm, str(doc.page))
         canvas.restoreState()
 
-    doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=18 * mm,
-                            leftMargin=18 * mm, topMargin=16 * mm,
-                            bottomMargin=23 * mm, title=proposal["title"])
+    doc = SimpleDocTemplate(str(path), pagesize=landscape(A4), rightMargin=12 * mm,
+                            leftMargin=12 * mm, topMargin=12 * mm,
+                            bottomMargin=15 * mm, title=proposal["title"])
     try:
         doc.build(story, onFirstPage=footer, onLaterPages=footer)
     except Exception:
